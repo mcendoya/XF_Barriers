@@ -1,0 +1,1621 @@
+---
+title: Barrier effects on the spatial distribution of *Xylella fastidiosa* in Alicante,
+  Spain
+author:
+- affiliation: Centre de Protecció Vegetal i Biotecnologia, Institut Valencià d'Investigacions
+    Agràries (IVIA), 46113 Moncada, Spain.
+  email: cendoya_mar@externos.gva.es
+  name: Martina Cendoya
+output:
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+```{r}
+library(INLA)
+library(rgdal)
+library(ggplot2)
+library(viridis)
+library(gridExtra)
+library(raster)
+library(ggspatial)
+library(rgeos)
+```
+
+
+## Data
+
+
+```{r results='hide'}
+# Xylella fastidiosa occurrence data in the demarcated area of Alicante (Spain)
+
+data_Xf <- read.table("./Data/data_Xf.txt")
+
+# Coordinate reference system
+
+newproj <- "+proj=utm +zone=30 +ellps=GRS80 +units=m +no_defs"
+
+```
+
+```{r results='hide'}
+## -- Boundaries -- ##
+
+# Study area
+
+bound <- readOGR('./Data/Boundaries', 'bound')
+
+# Mountain barrier boundary
+
+MB <- readOGR('./Data/Boundaries', 'bound_MB')
+
+bound_MB <- gDifference(bound, MB, checkValidity = 2L)
+
+# Continuous barrier boundary
+
+CB <- readOGR('./Data/Boundaries', 'bound_CB')
+
+bound_CB <- gDifference(bound, CB, checkValidity = 2L)
+
+# Discontinuous barrier boundary
+
+DB <- readOGR('./Data/Boundaries', 'bound_DB')
+
+bound_DB <- gDifference(bound, DB, checkValidity = 2L)
+
+```
+
+
+
+
+```{r eval=FALSE}
+## -- Remove data inside the barrier -- ##
+
+# Mountain barrier
+
+out.barrier = over(bound_MB,
+                   SpatialPoints(cbind(data_Xf$X, data_Xf$Y), proj4string = CRS(newproj)),
+                   returnList = T)[[1]]
+
+data_M <- data_Xf[out.barrier,]
+
+# write.table(data_M, './Data/data_Xf_M.txt')
+
+# Perimeter barriers
+
+out.barrier = over(bound_CB,
+                   SpatialPoints(cbind(data_Xf$X, data_Xf$Y), proj4string = CRS(newproj)),
+                   returnList = T)[[1]]
+
+data_B <- data_Xf[out.barrier,]
+
+# write.table(data_B, './Data/data_Xf_B.txt')
+
+```
+
+
+```{r results='hide'}
+## -- Read data -- ##
+
+# Mountain barrier data
+
+data_M <- read.table("./Data/data_Xf_M.txt")
+
+# Perimeter barriers data
+
+data_B <- read.table("./Data/data_Xf_B.txt")
+
+```
+
+
+```{r echo=FALSE}
+par(mai = c(0, 0, 0.5, 0), mfrow = c(2, 2), cex.main=0.8)
+
+plot(bound, main = "Stationary")
+points(data_Xf$X[data_Xf$ResLab == 0],
+       data_Xf$Y[data_Xf$ResLab == 0],
+       col = "green4",
+       cex = 0.3,
+       pch = 16)
+points(data_Xf$X[data_Xf$ResLab == 1],
+       data_Xf$Y[data_Xf$ResLab == 1],
+       col = "red2",
+       cex = 0.3,
+       pch = 16)
+
+
+plot(bound_MB, main="Mountain barrier")
+plot(MB, add = T, col = "grey")
+points(data_M$X[data_M$ResLab == 0],
+       data_M$Y[data_M$ResLab == 0],
+       col = "green4",
+       cex = 0.3,
+       pch = 16)
+points(data_M$X[data_M$ResLab == 1],
+       data_M$Y[data_M$ResLab == 1],
+       col = "red2",
+       cex = 0.3,
+       pch = 16)
+
+
+plot(bound_CB, main="Continuous barrier")
+plot(CB, add = T, col = "grey")
+points(data_B$X[data_B$ResLab == 0],
+       data_B$Y[data_B$ResLab == 0],
+       col = "green4",
+       cex = 0.3,
+       pch = 16)
+points(data_B$X[data_B$ResLab == 1],
+       data_B$Y[data_B$ResLab == 1],
+       col = "red2",
+       cex = 0.3,
+       pch = 16)
+
+
+plot(bound_DB, main="Discontinuous barrier")
+plot(DB, add = T, col = "grey")
+points(data_B$X[data_B$ResLab == 0],
+       data_B$Y[data_B$ResLab == 0],
+       col = "green4",
+       cex = 0.3,
+       pch = 16)
+points(data_B$X[data_B$ResLab == 1],
+       data_B$Y[data_B$ResLab == 1],
+       col = "red2",
+       cex = 0.3,
+       pch = 16)
+
+```
+
+## Models
+
+```{r}
+## -- Mesh -- ##
+
+# Stationary
+
+mesh_ST <- inla.mesh.2d(
+  boundary = bound,
+  max.edge = c(750, 3500),
+  offset = c(0.1,-0.1),
+  cutoff   = 750
+)
+
+# Mountain barrier
+
+mesh_MB <- inla.mesh.2d(
+  boundary = bound_MB,
+  max.edge = c(750, 3500),
+  offset = c(0.1, -0.1),
+  cutoff   = 750
+)
+
+
+# Continuous barrier
+
+mesh_CB <- inla.mesh.2d(
+  boundary = bound_CB,
+  max.edge = c(750, 3500),
+  offset = c(0.1, -0.1),
+  cutoff   = 750
+)
+
+# Discontinuous barrier
+
+mesh_DB <- inla.mesh.2d(
+  boundary = bound_DB,
+  max.edge = c(750, 3500),
+  offset = c(0.1, -0.1),
+  cutoff   = 750
+)
+```
+
+
+```{r echo=FALSE}
+# Plot
+
+par(mai = c(0, 0, 0, 0), mfrow = c(2, 2))
+
+plot(mesh_ST, main = F, lwd = 0.5)
+
+plot(mesh_MB, main = F, lwd = 0.5)
+plot(MB, add = T, col = "grey")
+
+plot(mesh_CB, main = F, lwd = 0.5)
+plot(CB, add = T, col = "grey")
+
+plot(mesh_DB, main = F, lwd = 0.5)
+plot(DB, add = T, col = "grey")
+
+```
+
+
+```{r include=FALSE}
+# Function to convert matrix to raster
+
+rotate <- function(x)
+   {apply(x, 2, rev)}
+
+matrix_to_raster <- function(m, proj.grid.mat = proj.grid.mat)
+{
+  raster(
+    rotate(t(m)),
+    xmn = min(proj.grid.mat$lattice$loc[, 1]),
+    xmx = max(proj.grid.mat$lattice$loc[, 1]),
+    ymn = min(proj.grid.mat$lattice$loc[, 2]),
+    ymx = max(proj.grid.mat$lattice$loc[, 2]),
+    crs = proj4string(bound)
+  )
+}
+
+```
+
+### 1. Stationary model
+
+```{r }
+data <- data_Xf
+mesh <- mesh_ST
+```
+
+```{r}
+# SPDE model definition
+
+size <- min(c(diff(range(data$X)), diff(range(data$Y))))
+range0 <- size / 2
+
+spde <- inla.spde2.pcmatern(
+  # Mesh
+  mesh = mesh,
+  # P(practic.range < range0) = 0.5
+  prior.range = c(range0, 0.5),
+  # P(sigma > 10) = 0.01
+  prior.sigma = c(10, 0.01)
+)
+
+# Projector matrix
+
+A.est <- inla.spde.make.A(mesh, loc = cbind(data$X, data$Y))
+
+# Data stack
+
+stk.est <- inla.stack(
+  data    = list(y = data$ResLab),
+  A       = list(A.est, 1),
+  effects = list(spatial = 1:mesh$n,
+                 beta0 = rep(1, nrow(data))),
+  tag     = 'est'
+)
+```
+
+```{r eval=FALSE}
+# Model fitting
+
+formula.1 <- y ~ -1 + beta0 + f(spatial, model = spde)
+
+model.est_ST <- inla(
+  formula.1,
+  data              = inla.stack.data(stk.est),
+  family            = "binomial" ,
+  control.compute   = list(
+    dic              = TRUE,
+    cpo              = TRUE,
+    waic             = TRUE,
+    return.marginals = TRUE
+  ),
+  control.predictor = list(A       = inla.stack.A(stk.est),
+                           compute = TRUE),
+  num.threads       = 2,
+  verbose           = FALSE
+)
+
+saveRDS(model.est_ST, "./Models/ST_model_est.rds")
+
+```
+
+```{r}
+# Read saved model
+
+model.est_ST <- readRDS("./Models/ST_model_est.rds")
+```
+
+
+```{r}
+# Projection on a grid
+
+dxy <- apply(bbox(bound), 1, diff)
+r <- dxy[1] / dxy[2]
+m <- 120
+proj.grid.mat <-
+  inla.mesh.projector(
+    mesh,
+    xlim = bbox(bound)[1, ],
+    ylim = bbox(bound)[2, ],
+    dims = c(r, 1) * m
+  )
+
+# NA to the values outside boundary
+
+ov <-
+  over(
+    SpatialPoints(proj.grid.mat$lattice$loc, bound@proj4string),
+    SpatialPolygons(bound@polygons, proj4string = bound@proj4string)
+  )
+
+i.temp <- is.na(ov)
+
+# Projector matrix to predict
+
+A.pred <-
+  inla.spde.make.A(mesh, loc = proj.grid.mat$lattice$loc[!i.temp, ])
+
+# Stack to predict
+
+stk.pred <- inla.stack(
+  data      = list(y = NA),
+  A       = list(A.pred, 1),
+  effects = list(spatial = 1:mesh$n,
+                 beta0 = rep(1, dim(A.pred)[1])),
+  tag     = 'pred'
+)
+
+stk <- inla.stack(stk.est, stk.pred)
+
+```
+
+```{r eval=FALSE}
+# Prediction
+
+model.pred_ST <- inla(
+  formula.1,
+  data = inla.stack.data(stk),
+  family = "binomial",
+  control.predictor = list(
+    A       = inla.stack.A(stk),
+    compute = TRUE,
+    link    = 1
+  ),
+  control.mode      = list(theta = model.est_ST$mode$theta,
+                           restart = TRUE),
+  num.threads       = 3,
+  verbose  = TRUE
+)
+
+saveRDS(model.pred_ST, "./Models/ST_model_pred.rds")
+
+```
+
+```{r}
+# Read saved model
+
+model.pred_ST <- readRDS("./Models/ST_model_pred.rds")
+```
+
+
+```{r}
+# Index of the predicted values
+
+idx <- inla.stack.index(stk, 'pred')$data
+
+# Matrix to visualize
+
+prob.mean_ST <-
+  prob.sd_ST <- matrix(NA, proj.grid.mat$lattice$dims[1],
+                       proj.grid.mat$lattice$dims[2])
+prob.mean_ST[!i.temp] <-
+  c(model.pred_ST$summary.fitted.values$mean[idx])
+prob.sd_ST[!i.temp] <-
+  c(model.pred_ST$summary.fitted.values$sd[idx])
+```
+
+#### Results
+
+- Posterior marginal distribution of parameters
+
+```{r}
+summary(model.est_ST)$fixed
+```
+
+&nbsp;
+
+- Posterior marginal distribution of hyperparameters
+
+```{r}
+summary(model.est_ST)$hyperpar
+
+```
+
+&nbsp;
+
+- Mean and SD of the posterior predictive distribution
+
+```{r echo=FALSE, fig.width=15, fig.height=5}
+# Plot mean and SD of the posterior predictive
+
+df_ST <- expand.grid(x = proj.grid.mat$x, y = proj.grid.mat$y)
+df_ST$mean_p <- as.vector(prob.mean_ST)
+df_ST$sd_p <- as.vector(prob.sd_ST)
+
+meanpred <- ggplot(df_ST, aes(x = x, y = y, fill = mean_p)) +
+  geom_tile() +
+  geom_polygon(
+    data = bound,
+    aes(x = long, y = lat, group = group),
+    fill = NA,
+    color = "grey50",
+    size = 1
+  ) +
+  scale_fill_gradient2(
+    low = "white",
+    high = "red",
+    na.value = "transparent",
+    limits = c(0, 0.87)
+  )  +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    legend.title = element_blank(),
+    legend.key.width = unit(0.5, "cm"),
+    legend.key.height = unit(1.2, "cm"),
+    legend.text = element_text(size = 15)
+  ) + 
+  ggtitle("Mean predictive")
+
+
+sdpred <- ggplot(df_ST, aes(x = x, y = y, fill = sd_p)) +
+  geom_tile() +
+  geom_polygon(
+    data = bound,
+    aes(x = long, y = lat, group = group),
+    fill = NA,
+    color = "grey50",
+    size = 1
+  ) +
+  scale_fill_viridis(
+    option = "D",
+    begin = 0.2,
+    direction = -1,
+    na.value = "transparent",
+    limits = c(0, 0.3), breaks = seq(0, 0.3, by = 0.05)
+  ) +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    legend.title = element_blank(),
+    legend.key.width = unit(0.5, "cm"),
+    legend.key.height = unit(1.2, "cm"),
+    legend.text = element_text(size = 15)
+  ) +
+  ggtitle("SD predictive")
+
+
+grid.arrange(meanpred, sdpred, ncol = 2)
+
+```
+
+&nbsp;
+
+```{r}
+# Raster of the posterior predictive mean for the difference between the models
+
+mean_pred_ST <- matrix_to_raster(prob.mean_ST, proj.grid.mat = proj.grid.mat)
+mean_pred_ST<-mask(mean_pred_ST, bound)
+```
+
+
+### 2. Mountain barrier model
+
+```{r}
+data <- data_M
+bound_barriers <- bound_MB
+mesh <- mesh_MB
+
+# Polygon with the barrier
+
+in.tri <- inla.over_sp_mesh(bound_barriers,
+                            y = mesh,
+                            type = "centroid",
+                            ignore.CRS = TRUE)
+num.tri <- length(mesh$graph$tv[, 1])
+barrier.tri <- setdiff(1:num.tri, in.tri)
+poly.barrier <- inla.barrier.polygon(mesh,
+                                     barrier.triangles = barrier.tri)
+
+# SPDE model definition
+
+size <- min(c(diff(range(data$X)), diff(range(data$Y))))
+range0 <- size / 2
+
+barrier.model <- inla.barrier.pcmatern(
+  mesh,
+  barrier.triangles =
+    barrier.tri,
+  prior.range = c(range0, 0.5),
+  prior.sigma = c(10, 0.01)
+)
+
+
+# Projector matrix
+
+A.est <- inla.spde.make.A(mesh, loc = cbind(data$X, data$Y))
+
+# Data stack
+
+stk.est <- inla.stack(
+  data    = list(y = data$ResLab),
+  A       = list(A.est, 1),
+  effects = list(spatial = 1:mesh$n,
+                 beta0 = rep(1, nrow(data))),
+  tag     = 'est'
+)
+```
+
+```{r eval=FALSE}
+# Model fitting
+
+formula.1 <- y ~ -1 + beta0 + f(spatial, model = barrier.model)
+
+model.est_MB <- inla(
+  formula.1,
+  data              = inla.stack.data(stk.est),
+  family            = "binomial" ,
+  control.compute   = list(
+    dic              = TRUE,
+    cpo              = TRUE,
+    waic             = TRUE,
+    return.marginals = TRUE
+  ),
+  control.predictor = list(A       = inla.stack.A(stk.est),
+                           compute = TRUE),
+  num.threads       = 2,
+  verbose           = FALSE
+)
+
+
+saveRDS(model.est_MB, "./Models/MB_model_est.rds")
+```
+
+```{r}
+# Read saved model
+
+model.est_MB <- readRDS("./Models/MB_model_est.rds")
+```
+
+
+```{r}
+# Projection on a grid
+
+dxy <- apply(bbox(bound_barriers), 1, diff)
+r <- dxy[1] / dxy[2]
+m <- 120
+proj.grid.mat <-
+  inla.mesh.projector(
+    mesh,
+    xlim = bbox(bound_barriers)[1, ],
+    ylim = bbox(bound_barriers)[2, ],
+    dims = c(r, 1) * m
+  )
+
+# NA to the values outside boundary
+
+ov <-
+  over(
+    SpatialPoints(proj.grid.mat$lattice$loc, bound@proj4string),
+    SpatialPolygons(bound@polygons, proj4string = bound@proj4string)
+  )
+
+i.temp <- is.na(ov)
+
+# Projector matrix to predict
+
+A.pred <-
+  inla.spde.make.A(mesh, loc = proj.grid.mat$lattice$loc[!i.temp, ])
+
+# Stack to predict
+
+stk.pred <- inla.stack(
+  data      = list(y = NA),
+  A       = list(A.pred, 1),
+  effects = list(spatial = 1:mesh$n,
+                 beta0 = rep(1, dim(A.pred)[1])),
+  tag     = 'pred'
+)
+
+stk <- inla.stack(stk.est, stk.pred)
+
+```
+
+```{r eval=FALSE}
+# Prediction
+
+model.pred_MB <- inla(
+  formula.1,
+  data = inla.stack.data(stk),
+  family = "binomial",
+  control.predictor = list(
+    A       = inla.stack.A(stk),
+    compute = TRUE,
+    link    = 1
+  ),
+  control.mode      = list(theta = model.est_MB$mode$theta,
+                           restart = TRUE),
+  num.threads       = 3,
+  verbose  = TRUE
+)
+
+saveRDS(model.pred_MB, "./Models/MB_model_pred.rds")
+
+```
+
+```{r}
+# Read saved model
+
+model.pred_MB <- readRDS("./Models/MB_model_pred.rds")
+```
+
+```{r}
+# Index of the predicted values
+
+idx <- inla.stack.index(stk, 'pred')$data
+
+# Matrix to visualize
+
+prob.mean_MB <-
+  prob.sd_MB <- matrix(NA, proj.grid.mat$lattice$dims[1],
+                       proj.grid.mat$lattice$dims[2])
+prob.mean_MB[!i.temp] <-
+  c(model.pred_MB$summary.fitted.values$mean[idx])
+prob.sd_MB[!i.temp] <-
+  c(model.pred_MB$summary.fitted.values$sd[idx])
+
+```
+
+#### Results
+
+- Posterior marginal distribution of parameters
+
+```{r}
+summary(model.est_MB)$fixed
+```
+
+&nbsp;
+
+- Posterior marginal distribution of hyperparameters
+
+```{r}
+summary(model.est_MB)$hyperpar
+```
+
+&nbsp;
+
+Standard deviation of the spatial effect $= e^{\theta_1}$
+
+Range $= e^{\theta_2}$
+
+```{r}
+pander::pander(exp(model.est_MB$summary.hyperpar[,c(1,3,4,5)]), row.names=c("SD", "Range"))
+```
+
+
+&nbsp;
+
+
+- Mean and SD of the posterior predictive distribution
+
+```{r echo=FALSE, fig.width=15, fig.height=5}
+# Plot mean and SD of the posterior predictive
+
+df_MB <- expand.grid(x = proj.grid.mat$x, y = proj.grid.mat$y)
+df_MB$mean_p <- as.vector(prob.mean_MB)
+df_MB$sd_p <- as.vector(prob.sd_MB)
+
+barrier_MB <- crop(MB, bound)
+
+meanpred <- ggplot(df_MB, aes(x = x, y = y, fill = mean_p)) +
+  geom_tile() +
+  geom_polygon(
+    data = barrier_MB,
+    aes(x = long, y = lat, group = group),
+    fill = "grey",
+    color = "grey50",
+    size = 1
+  ) +
+  geom_polygon(
+    data = bound_MB,
+    aes(x = long, y = lat, group = group),
+    fill = NA,
+    color = "grey50",
+    size = 1
+  ) +
+  scale_fill_gradient2(
+    low = "white",
+    high = "red",
+    na.value = "transparent",
+    limits = c(0, 0.87)
+  )  +   theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    legend.title = element_blank(),
+    legend.key.width = unit(0.5, "cm"),
+    legend.key.height = unit(1.2, "cm"),
+    legend.text = element_text(size = 15)
+  ) +
+  ggtitle("Mean predictive")
+
+sdpred <- ggplot(df_MB, aes(x = x, y = y, fill = sd_p)) +
+  geom_tile() +
+  geom_polygon(
+    data = barrier_MB,
+    aes(x = long, y = lat, group = group),
+    fill = "grey",
+    color = "grey50",
+    size = 1
+  ) +
+  geom_polygon(
+    data = bound_MB,
+    aes(x = long, y = lat, group = group),
+    fill = NA,
+    color = "grey50",
+    size = 1
+  ) +
+  scale_fill_viridis(
+    option = "D",
+    begin = 0.2,
+    direction = -1,
+    na.value = "transparent",
+    limits = c(0, 0.3), breaks = seq(0, 0.3, by = 0.05)
+  ) +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    legend.title = element_blank(),
+    legend.key.width = unit(0.5, "cm"),
+    legend.key.height = unit(1.2, "cm"),
+    legend.text = element_text(size = 15)
+  ) +
+  ggtitle("SD predictive")
+
+
+grid.arrange(meanpred, sdpred, ncol = 2)
+
+```
+
+&nbsp;
+
+
+```{r}
+# Raster of the posterior predictive mean for the difference between the models.
+
+mean_pred_MB <-
+  matrix_to_raster(prob.mean_MB, proj.grid.mat = proj.grid.mat)
+mean_pred_MB <- mask(mean_pred_MB, bound)
+
+```
+
+
+### 3. Continuous barrier model
+
+```{r}
+data <- data_B
+bound_barriers <- bound_CB
+mesh <- mesh_CB
+
+# Polygon with the barrier
+
+in.tri <- inla.over_sp_mesh(bound_barriers,
+                            y = mesh,
+                            type = "centroid",
+                            ignore.CRS = TRUE)
+num.tri <- length(mesh$graph$tv[, 1])
+barrier.tri <- setdiff(1:num.tri, in.tri)
+poly.barrier <- inla.barrier.polygon(mesh,
+                                     barrier.triangles = barrier.tri)
+
+# SPDE model definition
+
+size <- min(c(diff(range(data$X)), diff(range(data$Y))))
+range0 <- size / 2
+
+barrier.model <- inla.barrier.pcmatern(
+  mesh,
+  barrier.triangles =
+    barrier.tri,
+  prior.range = c(range0, 0.5),
+  prior.sigma = c(10, 0.01)
+)
+
+
+# Projector matrix
+
+A.est <- inla.spde.make.A(mesh, loc = cbind(data$X, data$Y))
+
+# Data stack
+
+stk.est <- inla.stack(
+  data    = list(y = data$ResLab),
+  A       = list(A.est, 1),
+  effects = list(spatial = 1:mesh$n,
+                 beta0 = rep(1, nrow(data))),
+  tag     = 'est'
+)
+```
+
+```{r eval=FALSE}
+# Model fitting
+
+formula.1 <- y ~ -1 + beta0 + f(spatial, model = barrier.model)
+
+model.est_CB <- inla(
+  formula.1,
+  data              = inla.stack.data(stk.est),
+  family            = "binomial" ,
+  control.compute   = list(
+    dic              = TRUE,
+    cpo              = TRUE,
+    waic             = TRUE,
+    return.marginals = TRUE
+  ),
+  control.predictor = list(A       = inla.stack.A(stk.est),
+                           compute = TRUE),
+  num.threads       = 2,
+  verbose           = FALSE
+)
+
+
+saveRDS(model.est_CB, "./Models/CB_model_est.rds")
+```
+
+```{r}
+# Read saved model
+
+model.est_CB <- readRDS("./Models/CB_model_est.rds")
+```
+
+
+```{r}
+# Projection on a grid
+
+dxy <- apply(bbox(bound_barriers), 1, diff)
+r <- dxy[1] / dxy[2]
+m <- 120
+proj.grid.mat <-
+  inla.mesh.projector(
+    mesh,
+    xlim = bbox(bound_barriers)[1, ],
+    ylim = bbox(bound_barriers)[2, ],
+    dims = c(r, 1) * m
+  )
+
+# NA to the values outside boundary
+
+ov <-
+  over(
+    SpatialPoints(proj.grid.mat$lattice$loc, bound@proj4string),
+    SpatialPolygons(bound@polygons, proj4string = bound@proj4string)
+  )
+
+i.temp <- is.na(ov)
+
+# Projector matrix to predict
+
+A.pred <-
+  inla.spde.make.A(mesh, loc = proj.grid.mat$lattice$loc[!i.temp, ])
+
+# Stack to predict
+
+stk.pred <- inla.stack(
+  data      = list(y = NA),
+  A       = list(A.pred, 1),
+  effects = list(spatial = 1:mesh$n,
+                 beta0 = rep(1, dim(A.pred)[1])),
+  tag     = 'pred'
+)
+
+stk <- inla.stack(stk.est, stk.pred)
+
+```
+
+```{r eval=FALSE}
+# Prediction
+
+model.pred_CB <- inla(
+  formula.1,
+  data = inla.stack.data(stk),
+  family = "binomial",
+  control.predictor = list(
+    A       = inla.stack.A(stk),
+    compute = TRUE,
+    link    = 1
+  ),
+  control.mode      = list(theta = model.est_CB$mode$theta,
+                           restart = TRUE),
+  num.threads       = 3,
+  verbose  = TRUE
+)
+
+saveRDS(model.pred_CB, "./Models/CB_model_pred.rds")
+
+```
+
+```{r}
+# Read saved model
+
+model.pred_CB <- readRDS("./Models/CB_model_pred.rds")
+```
+
+```{r}
+# Index of the predicted values
+
+idx <- inla.stack.index(stk, 'pred')$data
+
+# Matrix to visualize
+
+prob.mean_CB <-
+  prob.sd_CB <- matrix(NA, proj.grid.mat$lattice$dims[1],
+                       proj.grid.mat$lattice$dims[2])
+prob.mean_CB[!i.temp] <-
+  c(model.pred_CB$summary.fitted.values$mean[idx])
+prob.sd_CB[!i.temp] <-
+  c(model.pred_CB$summary.fitted.values$sd[idx])
+
+```
+
+#### Results
+
+- Posterior marginal distribution of parameters
+
+```{r}
+summary(model.est_CB)$fixed
+```
+
+&nbsp;
+
+- Posterior marginal distribution of hyperparameters
+
+```{r}
+summary(model.est_CB)$hyperpar
+```
+
+&nbsp;
+
+Standard deviation of the spatial effect $= e^{\theta_1}$
+
+Range $= e^{\theta_2}$
+
+```{r}
+pander::pander(exp(model.est_CB$summary.hyperpar[,c(1,3,4,5)]), row.names=c("SD", "Range"))
+```
+
+
+&nbsp;
+
+
+- Mean and SD of the posterior predictive distribution
+
+```{r echo=FALSE, fig.width=15, fig.height=5}
+# Plot mean and SD of the posterior predictive
+
+df_CB <- expand.grid(x = proj.grid.mat$x, y = proj.grid.mat$y)
+df_CB$mean_p <- as.vector(prob.mean_CB)
+df_CB$sd_p <- as.vector(prob.sd_CB)
+
+barrier_CB <- crop(CB, bound)
+
+meanpred <- ggplot(df_CB, aes(x = x, y = y, fill = mean_p)) +
+  geom_tile() +
+  geom_polygon(
+    data = barrier_CB,
+    aes(x = long, y = lat, group = group),
+    fill = "grey",
+    color = "grey50",
+    size = 1
+  ) +
+  geom_polygon(
+    data = bound_CB,
+    aes(x = long, y = lat, group = group),
+    fill = NA,
+    color = "grey50",
+    size = 1
+  ) +
+  scale_fill_gradient2(
+    low = "white",
+    high = "red",
+    na.value = "transparent",
+    limits = c(0, 0.87)
+  )  +   theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    legend.title = element_blank(),
+    legend.key.width = unit(0.5, "cm"),
+    legend.key.height = unit(1.2, "cm"),
+    legend.text = element_text(size = 15)
+  ) +
+  ggtitle("Mean predictive")
+
+sdpred <- ggplot(df_CB, aes(x = x, y = y, fill = sd_p)) +
+  geom_tile() +
+  geom_polygon(
+    data = barrier_CB,
+    aes(x = long, y = lat, group = group),
+    fill = "grey",
+    color = "grey50",
+    size = 1
+  ) +
+  geom_polygon(
+    data = bound_CB,
+    aes(x = long, y = lat, group = group),
+    fill = NA,
+    color = "grey50",
+    size = 1
+  ) +
+  scale_fill_viridis(
+    option = "D",
+    begin = 0.2,
+    direction = -1,
+    na.value = "transparent",
+    limits = c(0, 0.3), breaks = seq(0, 0.3, by = 0.05)
+  ) +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    legend.title = element_blank(),
+    legend.key.width = unit(0.5, "cm"),
+    legend.key.height = unit(1.2, "cm"),
+    legend.text = element_text(size = 15)
+  ) +
+  ggtitle("SD predictive")
+
+
+grid.arrange(meanpred, sdpred, ncol = 2)
+
+```
+
+```{r}
+# Raster of the posterior predictive mean for the difference between the models.
+
+mean_pred_CB <-
+  matrix_to_raster(prob.mean_CB, proj.grid.mat = proj.grid.mat)
+mean_pred_CB <- mask(mean_pred_CB, bound)
+
+```
+
+### 4. Discontinuous barrier model
+
+```{r}
+data <- data_B
+bound_barriers <- bound_DB
+mesh <- mesh_DB
+
+# Polygon with the barrier
+
+in.tri <- inla.over_sp_mesh(bound_barriers,
+                            y = mesh,
+                            type = "centroid",
+                            ignore.CRS = TRUE)
+num.tri <- length(mesh$graph$tv[, 1])
+barrier.tri <- setdiff(1:num.tri, in.tri)
+poly.barrier <- inla.barrier.polygon(mesh,
+                                     barrier.triangles = barrier.tri)
+
+# SPDE model definition
+
+size <- min(c(diff(range(data$X)), diff(range(data$Y))))
+range0 <- size / 2
+
+barrier.model <- inla.barrier.pcmatern(
+  mesh,
+  barrier.triangles =
+    barrier.tri,
+  prior.range = c(range0, 0.5),
+  prior.sigma = c(10, 0.01)
+)
+
+
+# Projector matrix
+
+A.est <- inla.spde.make.A(mesh, loc = cbind(data$X, data$Y))
+
+# Data stack
+
+stk.est <- inla.stack(
+  data    = list(y = data$ResLab),
+  A       = list(A.est, 1),
+  effects = list(spatial = 1:mesh$n,
+                 beta0 = rep(1, nrow(data))),
+  tag     = 'est'
+)
+```
+
+```{r eval=FALSE}
+# Model fitting
+
+formula.1 <- y ~ -1 + beta0 + f(spatial, model = barrier.model)
+
+model.est_DB <- inla(
+  formula.1,
+  data              = inla.stack.data(stk.est),
+  family            = "binomial" ,
+  control.compute   = list(
+    dic              = TRUE,
+    cpo              = TRUE,
+    waic             = TRUE,
+    return.marginals = TRUE
+  ),
+  control.predictor = list(A       = inla.stack.A(stk.est),
+                           compute = TRUE),
+  num.threads       = 2,
+  verbose           = FALSE
+)
+
+
+saveRDS(model.est_DB, "./Models/DB_model_est.rds")
+```
+
+```{r}
+# Read saved model
+
+model.est_DB <- readRDS("./Models/DB_model_est.rds")
+```
+
+
+```{r}
+# Projection on a grid
+
+dxy <- apply(bbox(bound_barriers), 1, diff)
+r <- dxy[1] / dxy[2]
+m <- 120
+proj.grid.mat <-
+  inla.mesh.projector(
+    mesh,
+    xlim = bbox(bound_barriers)[1, ],
+    ylim = bbox(bound_barriers)[2, ],
+    dims = c(r, 1) * m
+  )
+
+# NA to the values outside boundary
+
+ov <-
+  over(
+    SpatialPoints(proj.grid.mat$lattice$loc, bound@proj4string),
+    SpatialPolygons(bound@polygons, proj4string = bound@proj4string)
+  )
+
+i.temp <- is.na(ov)
+
+# Projector matrix to predict
+
+A.pred <-
+  inla.spde.make.A(mesh, loc = proj.grid.mat$lattice$loc[!i.temp, ])
+
+# Stack to predict
+
+stk.pred <- inla.stack(
+  data      = list(y = NA),
+  A       = list(A.pred, 1),
+  effects = list(spatial = 1:mesh$n,
+                 beta0 = rep(1, dim(A.pred)[1])),
+  tag     = 'pred'
+)
+
+stk <- inla.stack(stk.est, stk.pred)
+
+```
+
+```{r eval=FALSE}
+# Prediction
+
+model.pred_DB <- inla(
+  formula.1,
+  data = inla.stack.data(stk),
+  family = "binomial",
+  control.predictor = list(
+    A       = inla.stack.A(stk),
+    compute = TRUE,
+    link    = 1
+  ),
+  control.mode      = list(theta = model.est_DB$mode$theta,
+                           restart = TRUE),
+  num.threads       = 3,
+  verbose  = TRUE
+)
+
+saveRDS(model.pred_DB, "./Models/DB_model_pred.rds")
+
+```
+
+```{r}
+# Read saved model
+
+model.pred_DB <- readRDS("./Models/DB_model_pred.rds")
+```
+
+```{r}
+# Index of the predicted values
+
+idx <- inla.stack.index(stk, 'pred')$data
+
+# Matrix to visualize
+
+prob.mean_DB <-
+  prob.sd_DB <- matrix(NA, proj.grid.mat$lattice$dims[1],
+                       proj.grid.mat$lattice$dims[2])
+prob.mean_DB[!i.temp] <-
+  c(model.pred_DB$summary.fitted.values$mean[idx])
+prob.sd_DB[!i.temp] <-
+  c(model.pred_DB$summary.fitted.values$sd[idx])
+
+```
+
+#### Results
+
+- Posterior marginal distribution of parameters
+
+```{r}
+summary(model.est_CB)$fixed
+```
+
+&nbsp;
+
+- Posterior marginal distribution of hyperparameters
+
+```{r}
+summary(model.est_CB)$hyperpar
+```
+
+&nbsp;
+
+Standard deviation of the spatial effect $= e^{\theta_1}$
+
+Range $= e^{\theta_2}$
+
+```{r}
+pander::pander(exp(model.est_CB$summary.hyperpar[,c(1,3,4,5)]), row.names=c("SD", "Range"))
+```
+
+
+&nbsp;
+
+
+- Mean and SD of the posterior predictive distribution
+
+
+```{r echo=FALSE, fig.width=15, fig.height=5}
+# Plot mean and SD of the posterior predictive
+
+df_DB <- expand.grid(x = proj.grid.mat$x, y = proj.grid.mat$y)
+df_DB$mean_p <- as.vector(prob.mean_DB)
+df_DB$sd_p <- as.vector(prob.sd_DB)
+
+barrier_DB <- crop(DB, bound)
+
+meanpred <- ggplot(df_DB, aes(x = x, y = y, fill = mean_p)) +
+  geom_tile() +
+  geom_polygon(
+    data = barrier_DB,
+    aes(x = long, y = lat, group = group),
+    fill = "grey",
+    color = "grey50",
+    size = 1
+  ) +
+  geom_polygon(
+    data = bound_DB,
+    aes(x = long, y = lat, group = group),
+    fill = NA,
+    color = "grey50",
+    size = 1
+  ) +
+  scale_fill_gradient2(
+    low = "white",
+    high = "red",
+    na.value = "transparent",
+    limits = c(0, 0.87)
+  )  +   theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    legend.title = element_blank(),
+    legend.key.width = unit(0.5, "cm"),
+    legend.key.height = unit(1.2, "cm"),
+    legend.text = element_text(size = 15)
+  ) +
+  ggtitle("Mean predictive")
+
+sdpred <- ggplot(df_DB, aes(x = x, y = y, fill = sd_p)) +
+  geom_tile() +
+  geom_polygon(
+    data = barrier_DB,
+    aes(x = long, y = lat, group = group),
+    fill = "grey",
+    color = "grey50",
+    size = 1
+  ) +
+  geom_polygon(
+    data = bound_DB,
+    aes(x = long, y = lat, group = group),
+    fill = NA,
+    color = "grey50",
+    size = 1
+  ) +
+  scale_fill_viridis(
+    option = "D",
+    begin = 0.2,
+    direction = -1,
+    na.value = "transparent",
+    limits = c(0, 0.3), breaks = seq(0, 0.3, by = 0.05)
+  ) +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    legend.title = element_blank(),
+    legend.key.width = unit(0.5, "cm"),
+    legend.key.height = unit(1.2, "cm"),
+    legend.text = element_text(size = 15)
+  ) +
+  ggtitle("SD predictive")
+
+
+grid.arrange(meanpred, sdpred, ncol = 2)
+
+```
+
+```{r}
+# Raster of the posterior predictive mean for the difference between the models.
+
+mean_pred_DB <-
+  matrix_to_raster(prob.mean_DB, proj.grid.mat = proj.grid.mat)
+mean_pred_DB <- mask(mean_pred_DB, bound)
+
+```
+
+## Differences of the posterior predictive mean
+
+```{r include=FALSE}
+# Stationary - Continuous barrier
+
+preddiff_STCB <- overlay(
+  mean_pred_ST,
+  mean_pred_CB,
+  fun = function(r1, r2) {
+    return(r1 - r2)
+  }
+)
+
+# Stationary - Discontinuous barrier
+
+preddiff_STDB <- overlay(
+  mean_pred_ST,
+  mean_pred_DB,
+  fun = function(r1, r2) {
+    return(r1 - r2)
+  }
+)
+
+# Stationary - Mountain barrier
+
+preddiff_DBCB <- overlay(
+  mean_pred_DB,
+  mean_pred_CB,
+  fun = function(r1, r2) {
+    return(r1 - r2)
+  }
+)
+
+# Discontinuous barrier - Continuous barrier
+
+preddiff_STMB <- overlay(
+  mean_pred_ST,
+  mean_pred_MB,
+  fun = function(r1, r2) {
+    return(r1 - r2)
+  }
+)
+
+# Raster to points
+
+preddiff_STCB_pts <- rasterToPoints(preddiff_STCB, spatial = TRUE)
+preddiff_STDB_pts <- rasterToPoints(preddiff_STDB, spatial = TRUE)
+preddiff_DBCB_pts <- rasterToPoints(preddiff_DBCB, spatial = TRUE)
+preddiff_STMB_pts <- rasterToPoints(preddiff_STMB, spatial = TRUE)
+
+# Data frame
+
+df_diffpred <-
+  data.frame(x = preddiff_STCB_pts@coords[, 1], y = preddiff_STCB_pts@coords[, 2])
+df_diffpred$STCB <- preddiff_STCB_pts@data$layer
+df_diffpred$STDB <- preddiff_STDB_pts@data$layer
+df_diffpred$DBCB <- preddiff_DBCB_pts@data$layer
+df_diffpred$STMB <- preddiff_STMB_pts@data$layer
+
+```
+
+
+```{r echo=FALSE}
+# Plot differences
+
+pred_STCB <- ggplot(df_diffpred, aes(x = x, y = y, fill = STCB)) +
+  geom_tile() +
+  geom_polygon(
+    data = barrier_CB,
+    aes(x = long, y = lat, group = group),
+    fill = "grey",
+    color = "grey50",
+    size = 0.8
+  ) +
+  geom_polygon(
+    data = bound_CB,
+    aes(x = long, y = lat, group = group),
+    fill = NA,
+    color = "grey50",
+    size = 0.8
+  ) +
+  scale_fill_gradient2(
+    midpoint = 0,
+    low = "blue",
+    mid = "white",
+    high = "red",
+    na.value = "transparent",
+    limits = c(-0.48, 0.34)
+  )  +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    legend.title = element_blank(),
+    legend.key.width = unit(0.5, "cm"),
+    legend.key.height = unit(1, "cm"),
+    legend.text = element_text(size = 8),
+    plot.title = element_text(size=8)
+  ) +
+  ggtitle("Difference mean predictive \nStationary - Continuous barrier")
+
+pred_STDB <- ggplot(df_diffpred, aes(x = x, y = y, fill = STDB)) +
+  geom_tile() +
+  geom_polygon(
+    data = barrier_DB,
+    aes(x = long, y = lat, group = group),
+    fill = "grey",
+    color = "grey50",
+    size = 0.8
+  ) +
+  geom_polygon(
+    data = bound_CB,
+    aes(x = long, y = lat, group = group),
+    fill = NA,
+    color = "grey50",
+    size = 0.8
+  ) +
+  scale_fill_gradient2(
+    midpoint = 0,
+    low = "blue",
+    mid = "white",
+    high = "red",
+    na.value = "transparent",
+    limits=c(-0.48, 0.34)
+  )  +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    legend.title = element_blank(),
+    legend.key.width = unit(0.5, "cm"),
+    legend.key.height = unit(1, "cm"),
+    legend.text = element_text(size = 8), 
+    plot.title = element_text(size=8)
+  ) +
+  ggtitle("Difference mean predictive \nStationary - Discontinuous barrier")
+
+pred_DBCB <- ggplot(df_diffpred, aes(x = x, y = y, fill = DBCB)) +
+  geom_tile() +
+  geom_polygon(
+    data = barrier_DB,
+    aes(x = long, y = lat, group = group),
+    fill = "grey",
+    color = "grey50",
+    size = 0.8
+  ) +
+  geom_polygon(
+    data = bound_CB,
+    aes(x = long, y = lat, group = group),
+    fill = NA,
+    color = "grey50",
+    size = 0.8
+  ) +
+  scale_fill_gradient2(
+    midpoint = 0,
+    low = "blue",
+    mid = "white",
+    high = "red",
+    na.value = "transparent",
+    limits=c(-0.48, 0.34)
+  )  +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    legend.title = element_blank(),
+    legend.key.width = unit(0.5, "cm"),
+    legend.key.height = unit(1, "cm"),
+    legend.text = element_text(size = 8), 
+    plot.title = element_text(size=8)
+  ) +
+  ggtitle("Difference mean predictive \nDiscontinuous barrier - Continuous barrier")
+
+pred_STMB <- ggplot(df_diffpred, aes(x = x, y = y, fill = STMB)) +
+  geom_tile() +
+  geom_polygon(
+    data = barrier_MB,
+    aes(x = long, y = lat, group = group),
+    fill = "grey",
+    color = "grey50",
+    size = 0.8
+  ) +
+  geom_polygon(
+    data = bound_MB,
+    aes(x = long, y = lat, group = group),
+    fill = NA,
+    color = "grey50",
+    size = 0.8
+  ) +
+  scale_fill_gradient2(
+    midpoint = 0,
+    low = "blue",
+    mid = "white",
+    high = "red",
+    na.value = "transparent",
+    limits=c(-0.48, 0.34)
+  )  +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    legend.title = element_blank(),
+    legend.key.width = unit(0.5, "cm"),
+    legend.key.height = unit(1, "cm"),
+    legend.text = element_text(size = 8), 
+    plot.title = element_text(size=8)
+  ) +
+  ggtitle("Difference mean predictive \nStationary - Mountain barrier")
+
+
+grid.arrange(pred_STCB, pred_STDB, pred_DBCB, pred_STMB, ncol = 2)
+```
